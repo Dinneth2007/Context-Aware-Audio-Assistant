@@ -1,40 +1,83 @@
-// Content script: runs in the page's world, can read the DOM.
-// Listens for EXTRACT_CONTEXT requests from the sidebar and returns visible text.
+// Content script: runs in the page world. Builds sections, runs the
+// attention tracker, and broadcasts focus updates to the sidebar.
 
-function extractVisibleText() {
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const parent = node.parentElement;
-      if (!parent) return NodeFilter.FILTER_REJECT;
-      if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'].includes(parent.tagName)) {
-        return NodeFilter.FILTER_REJECT;
-      }
-      const text = node.nodeValue && node.nodeValue.trim();
-      if (!text) return NodeFilter.FILTER_REJECT;
-      const style = window.getComputedStyle(parent);
-      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
-        return NodeFilter.FILTER_REJECT;
-      }
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
+import { detectSections, watchSections, isRestrictedDocument } from './sections.js';
+import { setSections, getFocus, subscribe, startAttention } from './attention.js';
 
-  const parts = [];
-  let node;
-  while ((node = walker.nextNode())) {
-    parts.push(node.nodeValue.trim());
-  }
+const RESTRICTED = isRestrictedDocument();
+
+function restrictedFocus() {
   return {
-    title: document.title,
-    url: location.href,
-    text: parts.join(' ').replace(/\s+/g, ' ').trim(),
+    source: 'viewport',
+    section: null,
+    selectedText: null,
+    hoveredElement: null,
+    pageOutline: [],
+    pageMeta: {
+      title: document.title,
+      url: location.href,
+      wordCount: 0,
+      restricted: true,
+      restrictedReason: "Can't read this page directly — try selecting text",
+    },
   };
 }
 
+let lastBroadcastKey = '';
+let broadcastTimer = null;
+
+function focusKey(f) {
+  return [
+    f?.source,
+    f?.section?.id || '',
+    f?.selectedText ? f.selectedText.slice(0, 40) : '',
+    f?.hoveredElement?.type || '',
+  ].join('|');
+}
+
+function broadcast(focus) {
+  if (broadcastTimer) clearTimeout(broadcastTimer);
+  broadcastTimer = setTimeout(() => {
+    const key = focusKey(focus);
+    if (key === lastBroadcastKey) return;
+    lastBroadcastKey = key;
+    chrome.runtime
+      .sendMessage({ type: 'FOCUS_CHANGE', focus })
+      .catch(() => {}); // no listener (sidebar closed) is fine
+    console.log('[wubble content] focus →', focus.source, focus.section?.heading || '(no section)');
+  }, 500);
+}
+
+if (RESTRICTED) {
+  console.log('[wubble content] restricted document — focus tracking disabled');
+} else {
+  watchSections((sections) => {
+    console.log('[wubble content] sections detected:', sections.length);
+    setSections(sections);
+  });
+  startAttention();
+  subscribe(broadcast);
+  // Prime an initial broadcast once layout settles.
+  setTimeout(() => broadcast(getFocus()), 600);
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg && msg.type === 'EXTRACT_CONTEXT') {
+  if (!msg || typeof msg !== 'object') return;
+
+  if (msg.type === 'GET_FOCUS') {
     try {
-      sendResponse({ ok: true, ...extractVisibleText() });
+      sendResponse({ ok: true, focus: RESTRICTED ? restrictedFocus() : getFocus() });
+    } catch (e) {
+      sendResponse({ ok: false, error: e.message });
+    }
+    return true;
+  }
+
+  if (msg.type === 'EXTRACT_CONTEXT') {
+    try {
+      const focus = RESTRICTED ? restrictedFocus() : getFocus();
+      const text = focus.section?.text || '';
+      sendResponse({ ok: true, title: document.title, url: location.href, text, focus });
     } catch (e) {
       sendResponse({ ok: false, error: e.message });
     }
@@ -42,4 +85,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
-console.log('[wubble content] ready on', location.href);
+console.log('[wubble content] ready on', location.href, RESTRICTED ? '(restricted)' : '');
