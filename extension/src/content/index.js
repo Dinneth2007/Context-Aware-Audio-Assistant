@@ -5,6 +5,22 @@ import { detectSections, watchSections, isRestrictedDocument } from './sections.
 import { setSections, getFocus, subscribe, startAttention } from './attention.js';
 
 const RESTRICTED = isRestrictedDocument();
+let invalidated = false;
+let stopAttention = null;
+let stopWatch = null;
+
+function isContextInvalidated(err) {
+  return /Extension context invalidated/i.test(err?.message || '');
+}
+
+function teardown(reason) {
+  if (invalidated) return;
+  invalidated = true;
+  console.log('[wubble content] tearing down:', reason);
+  try { stopAttention && stopAttention(); } catch {}
+  try { stopWatch && stopWatch(); } catch {}
+  if (broadcastTimer) clearTimeout(broadcastTimer);
+}
 
 function restrictedFocus() {
   return {
@@ -36,14 +52,22 @@ function focusKey(f) {
 }
 
 function broadcast(focus) {
+  if (invalidated) return;
   if (broadcastTimer) clearTimeout(broadcastTimer);
   broadcastTimer = setTimeout(() => {
+    if (invalidated) return;
     const key = focusKey(focus);
     if (key === lastBroadcastKey) return;
     lastBroadcastKey = key;
-    chrome.runtime
-      .sendMessage({ type: 'FOCUS_CHANGE', focus })
-      .catch(() => {}); // no listener (sidebar closed) is fine
+    try {
+      const p = chrome.runtime.sendMessage({ type: 'FOCUS_CHANGE', focus });
+      if (p && typeof p.catch === 'function') {
+        p.catch((err) => { if (isContextInvalidated(err)) teardown('sendMessage rejected'); });
+      }
+    } catch (err) {
+      if (isContextInvalidated(err)) { teardown('sendMessage threw'); return; }
+      throw err;
+    }
     console.log('[wubble content] focus →', focus.source, focus.section?.heading || '(no section)');
   }, 500);
 }
@@ -51,17 +75,23 @@ function broadcast(focus) {
 if (RESTRICTED) {
   console.log('[wubble content] restricted document — focus tracking disabled');
 } else {
-  watchSections((sections) => {
+  stopWatch = watchSections((sections) => {
     console.log('[wubble content] sections detected:', sections.length);
     setSections(sections);
   });
-  startAttention();
+  stopAttention = startAttention();
   subscribe(broadcast);
-  // Prime an initial broadcast once layout settles.
-  setTimeout(() => broadcast(getFocus()), 600);
+  setTimeout(() => { if (!invalidated) broadcast(getFocus()); }, 600);
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+try {
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
+} catch (err) {
+  if (isContextInvalidated(err)) teardown('addListener threw');
+  else throw err;
+}
+
+function onRuntimeMessage(msg, _sender, sendResponse) {
   if (!msg || typeof msg !== 'object') return;
 
   if (msg.type === 'GET_FOCUS') {
@@ -83,6 +113,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     return true;
   }
-});
+}
 
 console.log('[wubble content] ready on', location.href, RESTRICTED ? '(restricted)' : '');
