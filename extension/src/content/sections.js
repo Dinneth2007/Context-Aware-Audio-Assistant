@@ -1,9 +1,11 @@
-// Semantic section detector. Walks the DOM to produce a list of
-// { id, heading, text, element, charCount } entries. Re-runs on DOM
-// mutation, debounced 500ms.
+// Semantic section detector. Walks the DOM in document order, partitioning
+// content into sections at h1/h2/h3 boundaries. Re-runs on DOM mutation,
+// debounced 500ms.
 
 const MIN_SECTION_CHARS = 100;
-const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'NAV', 'FOOTER', 'HEADER', 'ASIDE']);
+const SKIP_TEXT_PARENTS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+const REJECT_SUBTREE_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'NAV', 'FOOTER', 'ASIDE', 'SVG']);
+const HEADING_TAGS = new Set(['H1', 'H2', 'H3']);
 
 function djb2(str) {
   let h = 5381;
@@ -17,10 +19,9 @@ function visibleText(el) {
     acceptNode(node) {
       const p = node.parentElement;
       if (!p) return NodeFilter.FILTER_REJECT;
-      if (SKIP_TAGS.has(p.tagName)) return NodeFilter.FILTER_REJECT;
+      if (SKIP_TEXT_PARENTS.has(p.tagName)) return NodeFilter.FILTER_REJECT;
       const t = node.nodeValue && node.nodeValue.trim();
-      if (!t) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
+      return t ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
     },
   });
   const parts = [];
@@ -29,40 +30,63 @@ function visibleText(el) {
   return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
-function headingsBetween(start, end) {
-  const out = [];
-  let node = start.nextElementSibling;
-  while (node && node !== end) {
-    if (node.contains(end)) break;
-    out.push(node);
-    node = node.nextElementSibling;
-  }
-  return out;
-}
-
 function buildFromHeadings() {
-  const headings = Array.from(document.querySelectorAll('h1, h2, h3'))
-    .filter((h) => h.offsetParent !== null && h.textContent.trim().length > 0);
-  if (headings.length === 0) return [];
+  const root = document.body;
+  if (!root) return [];
 
-  const sections = [];
-  for (let i = 0; i < headings.length; i++) {
-    const h = headings[i];
-    const next = headings[i + 1];
-    const siblings = next ? headingsBetween(h, next) : [];
-    let bodyText = '';
-    for (const s of siblings) bodyText += ' ' + visibleText(s);
-    const headingText = h.textContent.trim();
-    const text = (headingText + ' ' + bodyText).replace(/\s+/g, ' ').trim();
-    sections.push({
-      id: djb2(headingText + '|' + text.slice(0, 50)),
-      heading: headingText,
-      text,
-      element: h,
-      charCount: text.length,
-    });
+  const walker = document.createTreeWalker(
+    root,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          const p = node.parentElement;
+          if (!p) return NodeFilter.FILTER_REJECT;
+          if (SKIP_TEXT_PARENTS.has(p.tagName)) return NodeFilter.FILTER_REJECT;
+          const t = node.nodeValue && node.nodeValue.trim();
+          return t ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }
+        const tag = node.tagName;
+        if (REJECT_SUBTREE_TAGS.has(tag)) return NodeFilter.FILTER_REJECT;
+        if (HEADING_TAGS.has(tag)) {
+          if (node.offsetParent === null) return NodeFilter.FILTER_SKIP;
+          if (!node.textContent.trim()) return NodeFilter.FILTER_SKIP;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      },
+    }
+  );
+
+  const buckets = [];
+  let current = null;
+  let inHeading = null;
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const headingText = node.textContent.trim();
+      current = { heading: headingText, headingEl: node, parts: [headingText] };
+      buckets.push(current);
+      inHeading = node;
+    } else if (current) {
+      if (inHeading && inHeading.contains(node)) continue;
+      inHeading = null;
+      current.parts.push(node.nodeValue.trim());
+    }
   }
-  return sections.filter((s) => s.charCount >= MIN_SECTION_CHARS);
+
+  return buckets
+    .map((b) => {
+      const text = b.parts.join(' ').replace(/\s+/g, ' ').trim();
+      return {
+        id: djb2(b.heading + '|' + text.slice(0, 50)),
+        heading: b.heading,
+        text,
+        element: b.headingEl,
+        charCount: text.length,
+      };
+    })
+    .filter((s) => s.charCount >= MIN_SECTION_CHARS);
 }
 
 function buildFromContainers() {
