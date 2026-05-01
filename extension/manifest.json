@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Wubble Audio Assistant",
+  "version": "0.1.0",
+  "description": "Context-aware audio assistant for web content (papers, blogs, docs, PDFs).",
+  "action": {
+    "default_title": "Open Wubble"
+  },
+  "background": {
+    "service_worker": "src/background/index.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "src/sidebar/index.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/index.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["sidePanel", "activeTab", "tabs", "scripting"],
+  "host_permissions": ["<all_urls>", "http://localhost:3001/*"]
+}
