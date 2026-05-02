@@ -7,6 +7,7 @@ const TICK_MS = 1000;
 const DECAY_INTERVAL_MS = 5000;
 const DECAY_FACTOR = 0.95;
 const MIN_DWELL_RATIO = 0.5;
+const PROACTIVE_THRESHOLD_MS = 25000;
 
 let sections = [];
 let sectionById = new Map();
@@ -19,6 +20,14 @@ let decayHandle = null;
 let selectionState = null;
 let hoverState = null;
 let listeners = new Set();
+
+// Proactive offer state
+let proactiveCallback = null;
+let proactiveSectionId = null;
+let proactiveStartMs = null;
+const proactiveFired = new Set();
+const proactiveDismissed = new Set();
+let proactiveTickHandle = null;
 
 function notify() {
   for (const fn of listeners) {
@@ -51,6 +60,8 @@ function onSelectionChange() {
   const anchorNode = sel.anchorNode;
   const section = findSectionForNode(anchorNode);
   selectionState = { text, sectionId: section?.id || null, ts: Date.now() };
+  // User activity → restart proactive window so we don't fire mid-task.
+  if (proactiveStartMs) proactiveStartMs = Date.now();
   notify();
 }
 
@@ -72,7 +83,7 @@ function onMouseOver(e) {
   }
 }
 
-function tick() {
+function computeActiveSectionId() {
   let bestId = null;
   let bestRatio = 0;
   for (const [id, ratio] of visibilityRatios) {
@@ -95,9 +106,37 @@ function tick() {
     }
     bestId = lastAbove;
   }
+  return bestId;
+}
+
+function tick() {
+  const bestId = computeActiveSectionId();
   if (bestId) {
     dwellMs.set(bestId, (dwellMs.get(bestId) || 0) + TICK_MS);
     notify();
+  }
+}
+
+function proactiveTick() {
+  if (!proactiveCallback) return;
+  const activeId = computeActiveSectionId();
+  if (!activeId) {
+    proactiveSectionId = null;
+    proactiveStartMs = null;
+    return;
+  }
+  if (activeId !== proactiveSectionId) {
+    proactiveSectionId = activeId;
+    proactiveStartMs = Date.now();
+    return;
+  }
+  if (proactiveFired.has(activeId) || proactiveDismissed.has(activeId)) return;
+  if (Date.now() - proactiveStartMs >= PROACTIVE_THRESHOLD_MS) {
+    proactiveFired.add(activeId);
+    const section = sectionById.get(activeId);
+    try {
+      proactiveCallback({ sectionId: activeId, heading: section?.heading || '' });
+    } catch (e) { console.error('[wubble proactive] callback error:', e); }
   }
 }
 
@@ -199,4 +238,23 @@ export function startAttention() {
     if (observer) observer.disconnect();
     listeners.clear();
   };
+}
+
+export function startProactive(cb) {
+  proactiveCallback = cb;
+  if (proactiveTickHandle) clearInterval(proactiveTickHandle);
+  proactiveTickHandle = setInterval(proactiveTick, TICK_MS);
+  return () => {
+    if (proactiveTickHandle) clearInterval(proactiveTickHandle);
+    proactiveTickHandle = null;
+    proactiveCallback = null;
+  };
+}
+
+export function resetProactiveWindow() {
+  if (proactiveSectionId) proactiveStartMs = Date.now();
+}
+
+export function dismissProactiveSection(id) {
+  if (id) proactiveDismissed.add(id);
 }

@@ -11,6 +11,9 @@ import {
   getState as getAudioState,
 } from './audio/state.js';
 
+const PROACTIVE_AUTO_DISMISS_MS = 12000;
+const CUE_STORAGE_KEY = 'wubble.proactiveAudioCue';
+
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab || null;
@@ -20,6 +23,31 @@ async function fetchFocusFromTab(tabId) {
   return chrome.tabs
     .sendMessage(tabId, { type: 'GET_FOCUS' })
     .catch(() => ({ ok: false, error: 'content script unreachable — refresh the page' }));
+}
+
+function sendToTab(tabId, msg) {
+  if (tabId == null) return;
+  try { chrome.tabs.sendMessage(tabId, msg).catch(() => {}); } catch {}
+}
+
+function playAudioCue() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = 660;
+    osc.type = 'sine';
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.05, ctx.currentTime + 0.02);
+    gain.gain.linearRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.2);
+    setTimeout(() => { ctx.close().catch(() => {}); }, 280);
+  } catch {}
 }
 
 function FocusPill({ focus }) {
@@ -62,6 +90,44 @@ function StateIndicator({ state }) {
   );
 }
 
+function ProactiveOffer({ heading, onAccept, onDismiss }) {
+  return (
+    <div className="bg-indigo-50 border border-indigo-200 rounded p-3 text-sm flex items-start justify-between gap-3">
+      <div className="flex-1">
+        <div className="text-xs text-indigo-700 font-medium mb-1">Spotted you reading…</div>
+        <div className="text-slate-800">
+          Been here a while — want me to explain
+          {' '}<span className="font-medium">"{heading}"</span>?
+        </div>
+        <div className="mt-2 flex gap-2">
+          <button
+            type="button"
+            onClick={onAccept}
+            className="text-xs px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 transition"
+          >
+            Yes, explain
+          </button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="text-xs px-2 py-1 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 transition"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        title="Dismiss"
+        className="text-slate-400 hover:text-slate-700 leading-none text-lg"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 function flushSentences(buffer, sink) {
   const re = /[.!?]+[)"'\]]?\s+/g;
   let lastIndex = 0;
@@ -83,6 +149,8 @@ export default function App() {
   const [error, setError] = useState('');
   const [focus, setFocus] = useState(null);
   const [activeTabId, setActiveTabId] = useState(null);
+  const [proactive, setProactive] = useState(null); // { sectionId, heading }
+  const [audioCueEnabled, setAudioCueEnabled] = useState(true);
 
   const { state: audioState, transition } = useAudioState();
   const sttRef = useRef(null);
@@ -90,6 +158,23 @@ export default function App() {
   const speakerSpeakingRef = useRef(false);
   const interimRef = useRef('');
   const runAskRef = useRef(null);
+  const proactiveAutoDismissRef = useRef(null);
+  const activeTabIdRef = useRef(null);
+
+  useEffect(() => { activeTabIdRef.current = activeTabId; }, [activeTabId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const stored = await chrome.storage.local.get(CUE_STORAGE_KEY);
+        if (!cancelled && typeof stored?.[CUE_STORAGE_KEY] === 'boolean') {
+          setAudioCueEnabled(stored[CUE_STORAGE_KEY]);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,28 +188,62 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
+  const dismissProactive = useCallback((reason) => {
+    setProactive((cur) => {
+      if (!cur) return null;
+      if (reason !== 'accept') {
+        // Tell content to mark this section dismissed for the page session.
+        sendToTab(activeTabIdRef.current, { type: 'PROACTIVE_DISMISS', sectionId: cur.sectionId });
+      }
+      return null;
+    });
+    if (proactiveAutoDismissRef.current) {
+      clearTimeout(proactiveAutoDismissRef.current);
+      proactiveAutoDismissRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     function onMsg(msg, sender) {
-      if (msg?.type !== 'FOCUS_CHANGE') return;
-      if (activeTabId != null && sender?.tab?.id !== activeTabId) return;
-      if (focusDebounce.current) clearTimeout(focusDebounce.current);
-      focusDebounce.current = setTimeout(() => setFocus(msg.focus), 500);
+      if (!msg || typeof msg !== 'object') return;
+      const fromActive = activeTabIdRef.current == null || sender?.tab?.id === activeTabIdRef.current;
+
+      if (msg.type === 'FOCUS_CHANGE' && fromActive) {
+        if (focusDebounce.current) clearTimeout(focusDebounce.current);
+        focusDebounce.current = setTimeout(() => setFocus(msg.focus), 500);
+        return;
+      }
+
+      if (msg.type === 'proactive-offer' && fromActive) {
+        // Suppress entirely while audio loop is active; section stays
+        // marked-fired in the content script (won't re-trigger this session).
+        if (getAudioState() !== 'idle') return;
+        if (!msg.sectionId) return;
+        setProactive({ sectionId: msg.sectionId, heading: msg.heading || '(this section)' });
+        if (audioCueEnabled) playAudioCue();
+        if (proactiveAutoDismissRef.current) clearTimeout(proactiveAutoDismissRef.current);
+        proactiveAutoDismissRef.current = setTimeout(() => {
+          dismissProactive('auto');
+        }, PROACTIVE_AUTO_DISMISS_MS);
+      }
     }
     chrome.runtime.onMessage.addListener(onMsg);
     return () => {
       chrome.runtime.onMessage.removeListener(onMsg);
       if (focusDebounce.current) clearTimeout(focusDebounce.current);
     };
-  }, [activeTabId]);
+  }, [audioCueEnabled, dismissProactive]);
 
   useEffect(() => {
     function onActivated({ tabId }) {
       setActiveTabId(tabId);
+      // Drop any pending offer when the user switches tabs.
+      dismissProactive('tab-switch');
       fetchFocusFromTab(tabId).then((r) => { if (r?.ok && r.focus) setFocus(r.focus); });
     }
     chrome.tabs.onActivated.addListener(onActivated);
     return () => chrome.tabs.onActivated.removeListener(onActivated);
-  }, []);
+  }, [dismissProactive]);
 
   useEffect(() => {
     if (!isSTTAvailable()) return;
@@ -173,6 +292,17 @@ export default function App() {
     setError('');
     setAnswer('');
     setLoading(true);
+    // Asking a question resets the proactive dwell window in content.
+    sendToTab(activeTabIdRef.current, { type: 'QUESTION_ASKED' });
+    // And clear any pending offer card without re-dismissing the section.
+    if (proactive) {
+      setProactive(null);
+      if (proactiveAutoDismissRef.current) {
+        clearTimeout(proactiveAutoDismissRef.current);
+        proactiveAutoDismissRef.current = null;
+      }
+    }
+
     try {
       const tab = await getActiveTab();
       if (!tab?.id) throw new Error('No active tab found');
@@ -180,6 +310,10 @@ export default function App() {
       if (!r?.ok) throw new Error(r?.error || 'Could not read focus from page');
       const payload = buildContextPayload(r.focus);
       setFocus(r.focus);
+
+      const triggerHighlight = (sectionId) => {
+        if (sectionId) sendToTab(tab.id, { type: 'WUBBLE_HIGHLIGHT', sectionId });
+      };
 
       if (opts.audio) {
         const ac = new AbortController();
@@ -196,6 +330,7 @@ export default function App() {
             payload,
             question: q,
             signal: ac.signal,
+            onMeta: (m) => triggerHighlight(m?.sectionId),
             onToken: (tok) => {
               if (firstToken) {
                 firstToken = false;
@@ -218,6 +353,9 @@ export default function App() {
           transition('idle');
         }
       } else {
+        // Highlight from the focus we're sending; the server grounds in this
+        // exact section, so we don't need to wait for a server echo.
+        triggerHighlight(payload?.section?.id);
         const data = await askAboutPage({ payload, question: q });
         setAnswer(data.answer || '(empty response)');
       }
@@ -228,7 +366,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [question, transition]);
+  }, [question, transition, proactive]);
 
   useEffect(() => { runAskRef.current = runAsk; }, [runAsk]);
 
@@ -259,6 +397,23 @@ export default function App() {
     tts.speak(answer).finally(() => { speakerSpeakingRef.current = false; });
   }
 
+  function handleProactiveAccept() {
+    const cur = proactive;
+    if (!cur) return;
+    setProactive(null);
+    if (proactiveAutoDismissRef.current) {
+      clearTimeout(proactiveAutoDismissRef.current);
+      proactiveAutoDismissRef.current = null;
+    }
+    setQuestion('Explain this section simply');
+    runAsk('Explain this section simply', { audio: false });
+  }
+
+  async function setCueEnabled(next) {
+    setAudioCueEnabled(next);
+    try { await chrome.storage.local.set({ [CUE_STORAGE_KEY]: next }); } catch {}
+  }
+
   const showStop = audioState !== 'idle';
   const composedText = interim ? (question ? `${question} ${interim}` : interim) : question;
 
@@ -274,7 +429,27 @@ export default function App() {
         <StateIndicator state={audioState} />
       </div>
 
+      <div className="px-4 pt-1 text-[11px] text-slate-500 flex items-center gap-2">
+        <label className="flex items-center gap-1 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={audioCueEnabled}
+            onChange={(e) => setCueEnabled(e.target.checked)}
+            className="accent-indigo-600"
+          />
+          <span>Audio cue on proactive offer</span>
+        </label>
+      </div>
+
       <main className="flex-1 flex flex-col gap-3 p-4 overflow-hidden">
+        {proactive && (
+          <ProactiveOffer
+            heading={proactive.heading}
+            onAccept={handleProactiveAccept}
+            onDismiss={() => dismissProactive('user')}
+          />
+        )}
+
         <textarea
           value={composedText}
           onChange={(e) => { setQuestion(e.target.value); setInterim(''); }}

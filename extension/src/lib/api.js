@@ -14,8 +14,9 @@ export async function askAboutPage({ payload, question }) {
 }
 
 // Streams SSE tokens from /api/chat. onToken is called with each text fragment.
+// onMeta(obj) is called once if the server emits a named 'meta' event.
 // Resolves when the server emits [DONE]. Throws on abort or server error event.
-export async function streamAsk({ payload, question, signal, onToken }) {
+export async function streamAsk({ payload, question, signal, onToken, onMeta }) {
   const res = await fetch(`${SERVER_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
@@ -39,14 +40,27 @@ export async function streamAsk({ payload, question, signal, onToken }) {
 
     let sep;
     while ((sep = buf.indexOf('\n\n')) !== -1) {
-      const event = buf.slice(0, sep);
+      const block = buf.slice(0, sep);
       buf = buf.slice(sep + 2);
-      const dataLine = event.split('\n').find((l) => l.startsWith('data:'));
-      if (!dataLine) continue;
-      const payloadStr = dataLine.slice(5).trim();
-      if (payloadStr === '[DONE]') return;
+      let eventName = 'message';
+      let dataPayload = '';
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+        else if (line.startsWith('data:')) {
+          if (dataPayload) dataPayload += '\n';
+          dataPayload += line.slice(5).trim();
+        }
+      }
+      if (!dataPayload) continue;
+
+      if (eventName === 'meta') {
+        try { onMeta?.(JSON.parse(dataPayload)); } catch {}
+        continue;
+      }
+
+      if (dataPayload === '[DONE]') return;
       try {
-        const obj = JSON.parse(payloadStr);
+        const obj = JSON.parse(dataPayload);
         if (obj.error) throw new Error(obj.error);
         if (obj.token) onToken(obj.token);
       } catch (e) {

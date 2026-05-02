@@ -116,6 +116,11 @@ router.post('/chat', async (req, res) => {
     req.on('close', () => { aborted = true; });
 
     try {
+      const groundedId = payload?.section?.id || null;
+      if (groundedId) {
+        res.write(`event: meta\ndata: ${JSON.stringify({ sectionId: groundedId })}\n\n`);
+      }
+
       const stream = await getAI().models.generateContentStream({
         model: MODEL_NAME,
         contents,

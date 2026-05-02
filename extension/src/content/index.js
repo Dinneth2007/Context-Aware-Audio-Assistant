@@ -2,12 +2,22 @@
 // attention tracker, and broadcasts focus updates to the sidebar.
 
 import { detectSections, watchSections, isRestrictedDocument } from './sections.js';
-import { setSections, getFocus, subscribe, startAttention } from './attention.js';
+import {
+  setSections,
+  getFocus,
+  subscribe,
+  startAttention,
+  startProactive,
+  resetProactiveWindow,
+  dismissProactiveSection,
+} from './attention.js';
 
 const RESTRICTED = isRestrictedDocument();
 let invalidated = false;
 let stopAttention = null;
 let stopWatch = null;
+let stopProactive = null;
+let currentSections = [];
 
 function isContextInvalidated(err) {
   return /Extension context invalidated/i.test(err?.message || '');
@@ -19,6 +29,7 @@ function teardown(reason) {
   console.log('[wubble content] tearing down:', reason);
   try { stopAttention && stopAttention(); } catch {}
   try { stopWatch && stopWatch(); } catch {}
+  try { stopProactive && stopProactive(); } catch {}
   if (broadcastTimer) clearTimeout(broadcastTimer);
 }
 
@@ -51,6 +62,18 @@ function focusKey(f) {
   ].join('|');
 }
 
+function safeSendMessage(msg) {
+  try {
+    const p = chrome.runtime.sendMessage(msg);
+    if (p && typeof p.catch === 'function') {
+      p.catch((err) => { if (isContextInvalidated(err)) teardown('sendMessage rejected'); });
+    }
+  } catch (err) {
+    if (isContextInvalidated(err)) { teardown('sendMessage threw'); return; }
+    throw err;
+  }
+}
+
 function broadcast(focus) {
   if (invalidated) return;
   if (broadcastTimer) clearTimeout(broadcastTimer);
@@ -59,17 +82,49 @@ function broadcast(focus) {
     const key = focusKey(focus);
     if (key === lastBroadcastKey) return;
     lastBroadcastKey = key;
-    try {
-      const p = chrome.runtime.sendMessage({ type: 'FOCUS_CHANGE', focus });
-      if (p && typeof p.catch === 'function') {
-        p.catch((err) => { if (isContextInvalidated(err)) teardown('sendMessage rejected'); });
-      }
-    } catch (err) {
-      if (isContextInvalidated(err)) { teardown('sendMessage threw'); return; }
-      throw err;
-    }
+    safeSendMessage({ type: 'FOCUS_CHANGE', focus });
     console.log('[wubble content] focus →', focus.source, focus.section?.heading || '(no section)');
   }, 500);
+}
+
+// ---------- Grounding highlight ----------
+const HIGHLIGHT_STYLE_ID = 'wubble-grounded-style';
+function ensureHighlightStyle() {
+  if (document.getElementById(HIGHLIGHT_STYLE_ID)) return;
+  const s = document.createElement('style');
+  s.id = HIGHLIGHT_STYLE_ID;
+  s.textContent = `
+.wubble-grounded {
+  animation: wubble-grounded 2500ms ease-in-out forwards;
+  border-radius: 3px;
+}
+@keyframes wubble-grounded {
+  0%   { box-shadow: inset 3px 0 0 0 rgba(16,185,129,0); background-color: rgba(16,185,129,0); }
+  16%  { box-shadow: inset 3px 0 0 0 rgba(16,185,129,1); background-color: rgba(16,185,129,0.07); }
+  84%  { box-shadow: inset 3px 0 0 0 rgba(16,185,129,1); background-color: rgba(16,185,129,0.07); }
+  100% { box-shadow: inset 3px 0 0 0 rgba(16,185,129,0); background-color: rgba(16,185,129,0); }
+}
+`;
+  (document.head || document.documentElement).appendChild(s);
+}
+
+function highlightSection(sectionId) {
+  if (!sectionId) return;
+  const target = currentSections.find((s) => s.id === sectionId);
+  if (!target?.element) return;
+  ensureHighlightStyle();
+  target.element.classList.remove('wubble-grounded');
+  // force reflow so re-adding the class restarts the animation
+  void target.element.offsetWidth;
+  target.element.classList.add('wubble-grounded');
+  setTimeout(() => {
+    try { target.element.classList.remove('wubble-grounded'); } catch {}
+  }, 2600);
+}
+
+// ---------- Proactive offer ----------
+function onProactiveTrigger({ sectionId, heading }) {
+  safeSendMessage({ type: 'proactive-offer', sectionId, heading });
 }
 
 if (RESTRICTED) {
@@ -77,10 +132,12 @@ if (RESTRICTED) {
 } else {
   stopWatch = watchSections((sections) => {
     console.log('[wubble content] sections detected:', sections.length);
+    currentSections = sections;
     setSections(sections);
   });
   stopAttention = startAttention();
   subscribe(broadcast);
+  stopProactive = startProactive(onProactiveTrigger);
   setTimeout(() => { if (!invalidated) broadcast(getFocus()); }, 600);
 }
 
@@ -112,6 +169,21 @@ function onRuntimeMessage(msg, _sender, sendResponse) {
       sendResponse({ ok: false, error: e.message });
     }
     return true;
+  }
+
+  if (msg.type === 'WUBBLE_HIGHLIGHT') {
+    try { highlightSection(msg.sectionId); } catch {}
+    return; // no response needed
+  }
+
+  if (msg.type === 'PROACTIVE_DISMISS') {
+    try { dismissProactiveSection(msg.sectionId); } catch {}
+    return;
+  }
+
+  if (msg.type === 'QUESTION_ASKED') {
+    try { resetProactiveWindow(); } catch {}
+    return;
   }
 }
 
