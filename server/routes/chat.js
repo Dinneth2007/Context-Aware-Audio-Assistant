@@ -95,11 +95,36 @@ router.post('/chat', async (req, res) => {
 
     try {
       const result = await getModel().generateContentStream({ contents });
+      let chunkCount = 0;
+      let emittedChars = 0;
       for await (const chunk of result.stream) {
         if (aborted) break;
-        const token = chunk.text();
-        if (token) res.write(`data: ${JSON.stringify({ token })}\n\n`);
+        chunkCount++;
+        const token = typeof chunk.text === 'function' ? chunk.text() : '';
+        console.log('[wubble server] chunk', chunkCount, 'text len:', (token || '').length);
+        if (token) {
+          emittedChars += token.length;
+          res.write(`data: ${JSON.stringify({ token })}\n\n`);
+        }
       }
+      console.log('[wubble server] stream loop done. chunks:', chunkCount, 'emittedChars:', emittedChars);
+
+      // Fallback: if streaming produced nothing, drain the aggregated
+      // response (useful when 2.5 models route content through paths
+      // where chunk.text() comes back empty in this SDK).
+      if (!aborted && emittedChars === 0) {
+        try {
+          const finalResp = await result.response;
+          const finalText = typeof finalResp.text === 'function' ? finalResp.text() : '';
+          console.log('[wubble server] streaming was empty; final response chars:', (finalText || '').length);
+          if (finalText) {
+            res.write(`data: ${JSON.stringify({ token: finalText })}\n\n`);
+          }
+        } catch (e) {
+          console.error('[wubble server] final-response fallback failed:', e.message);
+        }
+      }
+
       if (!aborted) res.write('data: [DONE]\n\n');
     } catch (err) {
       console.error('[wubble server] /api/chat stream error:', err);
