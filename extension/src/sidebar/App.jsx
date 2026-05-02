@@ -134,6 +134,9 @@ export default function App() {
     const offFinal = stt.on('final', (t) => {
       setInterim('');
       setQuestion(t);
+      // Move out of 'listening' synchronously so the immediately-following
+      // 'end' event doesn't race us back to 'idle' before runAsk does so.
+      if (getAudioState() === 'listening') transition('thinking');
       runAsk(t, { audio: true });
     });
     const offError = stt.on('error', (e) => {

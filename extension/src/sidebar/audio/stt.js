@@ -42,13 +42,25 @@ export function createSTT() {
   rec.interimResults = true;
   rec.lang = 'en-US';
 
+  const SILENCE_MS = 1500; // stop manually if no new interim within this window
   const listeners = { interim: new Set(), final: new Set(), error: new Set(), end: new Set() };
   let running = false;
+  let lastInterim = '';
+  let gotFinal = false;
+  let silenceTimer = null;
 
   function emit(event, payload) {
     for (const fn of listeners[event] || []) {
       try { fn(payload); } catch (e) { console.error('[wubble stt] listener error:', e); }
     }
+  }
+
+  function resetSilenceTimer() {
+    if (silenceTimer) clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+      // No fresh interim for SILENCE_MS — treat as end of utterance and stop.
+      try { rec.stop(); } catch {}
+    }, SILENCE_MS);
   }
 
   rec.onresult = (ev) => {
@@ -59,8 +71,17 @@ export function createSTT() {
       if (r.isFinal) finalText += r[0].transcript;
       else interim += r[0].transcript;
     }
-    if (interim) emit('interim', interim.trim());
-    if (finalText) emit('final', finalText.trim());
+    if (interim) {
+      lastInterim = interim.trim();
+      emit('interim', lastInterim);
+      resetSilenceTimer();
+    }
+    if (finalText) {
+      gotFinal = true;
+      lastInterim = '';
+      if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+      emit('final', finalText.trim());
+    }
   };
 
   rec.onerror = (ev) => {
@@ -70,8 +91,22 @@ export function createSTT() {
     emit('error', { code, message: message || `Speech recognition error: ${code}` });
   };
 
-  rec.onend = () => { running = false; emit('end'); };
-  rec.onstart = () => { running = true; };
+  rec.onend = () => {
+    running = false;
+    if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+    // Recognizer ended without ever finalizing — promote the last interim.
+    if (!gotFinal && lastInterim) {
+      const t = lastInterim;
+      lastInterim = '';
+      emit('final', t);
+    }
+    emit('end');
+  };
+  rec.onstart = () => {
+    running = true;
+    lastInterim = '';
+    gotFinal = false;
+  };
 
   return {
     start() {
@@ -80,6 +115,7 @@ export function createSTT() {
       catch (err) { emit('error', { code: 'start-failed', message: err.message }); }
     },
     stop() {
+      if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
       if (!running) return;
       try { rec.stop(); } catch {}
     },
