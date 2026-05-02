@@ -321,13 +321,8 @@ export default function App() {
         bindAbortController(ac);
         transition('thinking');
 
-        let buffer = '';
+        let answerText = '';
         let firstToken = true;
-        let tokenCount = 0;
-        const speakPromises = [];
-        const speakOne = (s) => {
-          speakPromises.push(tts.speak(s).catch(() => {}));
-        };
 
         try {
           await streamAsk({
@@ -336,23 +331,25 @@ export default function App() {
             signal: ac.signal,
             onMeta: (m) => triggerHighlight(m?.sectionId, m?.heading),
             onToken: (tok) => {
-              tokenCount++;
               if (firstToken) {
                 firstToken = false;
                 if (getAudioState() === 'thinking') transition('speaking');
               }
               setAnswer((prev) => prev + tok);
-              buffer += tok;
-              buffer = flushSentences(buffer, speakOne);
+              answerText += tok;
             },
           });
         } catch (err) {
           if (err.name === 'AbortError') return;
           throw err;
         }
-        const tail = buffer.trim();
-        if (tail) speakOne(tail);
-        await Promise.allSettled(speakPromises);
+
+        // Single speak() call for the whole answer — same path as the
+        // Replay button, which we know works reliably in the side panel.
+        if (answerText.trim()) {
+          if (getAudioState() === 'thinking') transition('speaking');
+          await tts.speak(answerText.trim()).catch(() => {});
+        }
         clearAbortController();
         if (getAudioState() === 'speaking' || getAudioState() === 'thinking') {
           transition('idle');
