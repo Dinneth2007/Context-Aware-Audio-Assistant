@@ -5,3 +5,13 @@ dist
 *.log
 .vite
 .claude/settings.local.json
+
+# AI tooling artifacts
+CLAUDE.md
+.cursorrules
+.aider*
+.continue/
+.windsurf/
+.github/copilot-instructions.md
+*handoff*.md
+*handoff*.pdf
