@@ -312,6 +312,7 @@ export default function App() {
       setFocus(r.focus);
 
       const triggerHighlight = (sectionId) => {
+        console.log('[wubble app] triggerHighlight →', sectionId, 'tab', tab.id);
         if (sectionId) sendToTab(tab.id, { type: 'WUBBLE_HIGHLIGHT', sectionId });
       };
 
@@ -379,6 +380,18 @@ export default function App() {
       setError('Speech recognition is not supported in this browser.');
       return;
     }
+    // Chrome quirk: speechSynthesis silently fails if speak() is first
+    // called outside a recent user gesture. The mic click IS a gesture,
+    // so warm the synth here with a silent utterance to unlock it for
+    // the (much later) token-driven speak() calls.
+    try {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const warm = new SpeechSynthesisUtterance('');
+        warm.volume = 0;
+        window.speechSynthesis.speak(warm);
+      }
+    } catch {}
     setQuestion('');
     setInterim('');
     transition('listening');

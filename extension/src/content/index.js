@@ -95,26 +95,44 @@ function ensureHighlightStyle() {
   s.id = HIGHLIGHT_STYLE_ID;
   s.textContent = `
 .wubble-grounded {
-  animation: wubble-grounded 2500ms ease-in-out forwards;
-  border-radius: 3px;
+  animation: wubble-grounded 2500ms ease-in-out forwards !important;
+  border-radius: 3px !important;
+  outline-offset: 2px;
 }
 @keyframes wubble-grounded {
-  0%   { box-shadow: inset 3px 0 0 0 rgba(16,185,129,0); background-color: rgba(16,185,129,0); }
-  16%  { box-shadow: inset 3px 0 0 0 rgba(16,185,129,1); background-color: rgba(16,185,129,0.07); }
-  84%  { box-shadow: inset 3px 0 0 0 rgba(16,185,129,1); background-color: rgba(16,185,129,0.07); }
-  100% { box-shadow: inset 3px 0 0 0 rgba(16,185,129,0); background-color: rgba(16,185,129,0); }
+  0%   { background-color: rgba(16,185,129,0);    outline: 0 solid rgba(16,185,129,0); }
+  16%  { background-color: rgba(16,185,129,0.12); outline: 3px solid rgba(16,185,129,0.9); }
+  84%  { background-color: rgba(16,185,129,0.12); outline: 3px solid rgba(16,185,129,0.9); }
+  100% { background-color: rgba(16,185,129,0);    outline: 0 solid rgba(16,185,129,0); }
 }
 `;
   (document.head || document.documentElement).appendChild(s);
 }
 
 function highlightSection(sectionId) {
-  if (!sectionId) return;
+  if (!sectionId) {
+    console.log('[wubble content] highlight: no sectionId');
+    return;
+  }
   const target = currentSections.find((s) => s.id === sectionId);
-  if (!target?.element) return;
+  if (!target?.element) {
+    console.log(
+      '[wubble content] highlight: no match for', sectionId,
+      '— knownIds:', currentSections.map((s) => s.id).slice(0, 5)
+    );
+    return;
+  }
+  console.log('[wubble content] highlight:', target.heading, '→ scrolling into view + animating');
   ensureHighlightStyle();
+  // Scroll into view if the section is offscreen, so the user actually
+  // sees the animation fire.
+  try {
+    const rect = target.element.getBoundingClientRect();
+    if (rect.bottom < 0 || rect.top > window.innerHeight) {
+      target.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  } catch {}
   target.element.classList.remove('wubble-grounded');
-  // force reflow so re-adding the class restarts the animation
   void target.element.offsetWidth;
   target.element.classList.add('wubble-grounded');
   setTimeout(() => {
