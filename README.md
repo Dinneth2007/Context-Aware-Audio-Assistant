@@ -1,6 +1,6 @@
 # Wubble
 
-TAGLINE_PLACEHOLDER
+Context Aware Reading-Audio Assistant
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
