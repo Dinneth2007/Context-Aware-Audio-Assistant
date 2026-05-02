@@ -28,7 +28,8 @@ Rules:
 - Keep answers under 120 words by default. Only go longer if the user
   explicitly asks for detail, depth, or a long-form explanation.
 - Prefer plain prose. Use bullets only when the answer is genuinely a
-  list.`;
+  list. When your answer is going to be spoken aloud, prefer flowing
+  prose over bullets.`;
 
 function formatPayload(payload) {
   if (!payload) return '(no context provided)';
@@ -64,20 +65,56 @@ function formatPayload(payload) {
   return lines.join('\n');
 }
 
+function buildMessages(payload, question) {
+  return [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: `${formatPayload(payload)}\n\nQuestion: ${question}` },
+  ];
+}
+
 router.post('/chat', async (req, res) => {
-  const { payload, question } = req.body || {};
+  const { payload, question, stream } = req.body || {};
   if (!question || typeof question !== 'string') {
     return res.status(400).json({ error: 'question (string) is required' });
+  }
+
+  if (stream) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    let aborted = false;
+    req.on('close', () => { aborted = true; });
+
+    try {
+      const completion = await getOpenAI().chat.completions.create({
+        model: 'gpt-4o-mini',
+        temperature: 0.3,
+        stream: true,
+        messages: buildMessages(payload, question),
+      });
+      for await (const chunk of completion) {
+        if (aborted) break;
+        const token = chunk.choices?.[0]?.delta?.content;
+        if (token) res.write(`data: ${JSON.stringify({ token })}\n\n`);
+      }
+      if (!aborted) res.write('data: [DONE]\n\n');
+    } catch (err) {
+      console.error('[wubble server] /api/chat stream error:', err);
+      try { res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`); } catch {}
+    } finally {
+      res.end();
+    }
+    return;
   }
 
   try {
     const completion = await getOpenAI().chat.completions.create({
       model: 'gpt-4o-mini',
       temperature: 0.3,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: `${formatPayload(payload)}\n\nQuestion: ${question}` },
-      ],
+      messages: buildMessages(payload, question),
     });
 
     res.json({
