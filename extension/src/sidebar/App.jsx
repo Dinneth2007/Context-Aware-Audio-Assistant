@@ -88,6 +88,8 @@ export default function App() {
   const sttRef = useRef(null);
   const focusDebounce = useRef(null);
   const speakerSpeakingRef = useRef(false);
+  const interimRef = useRef('');
+  const runAskRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,21 +132,40 @@ export default function App() {
     sttRef.current = stt;
     bindSTT(stt);
 
-    const offInterim = stt.on('interim', (t) => setInterim(t));
-    const offFinal = stt.on('final', (t) => {
+    function submitTranscript(t) {
+      console.log('[wubble app] submitting transcript:', t);
+      interimRef.current = '';
       setInterim('');
       setQuestion(t);
-      // Move out of 'listening' synchronously so the immediately-following
-      // 'end' event doesn't race us back to 'idle' before runAsk does so.
       if (getAudioState() === 'listening') transition('thinking');
-      runAsk(t, { audio: true });
+      const fn = runAskRef.current;
+      if (fn) fn(t, { audio: true });
+    }
+
+    const offInterim = stt.on('interim', (t) => {
+      console.log('[wubble app] interim:', t);
+      interimRef.current = t;
+      setInterim(t);
+    });
+    const offFinal = stt.on('final', (t) => {
+      console.log('[wubble app] final received:', t);
+      submitTranscript(t);
     });
     const offError = stt.on('error', (e) => {
+      console.warn('[wubble app] stt error:', e);
+      interimRef.current = '';
       setInterim('');
       setError(e.message);
       if (getAudioState() === 'listening') transition('idle');
     });
     const offEnd = stt.on('end', () => {
+      const lingering = (interimRef.current || '').trim();
+      console.log('[wubble app] stt end, lingering interim:', lingering, 'state:', getAudioState());
+      if (lingering && getAudioState() === 'listening') {
+        submitTranscript(lingering);
+        return;
+      }
+      interimRef.current = '';
       setInterim('');
       if (getAudioState() === 'listening') transition('idle');
     });
@@ -156,6 +177,7 @@ export default function App() {
   const runAsk = useCallback(async (qOverride, opts = {}) => {
     const q = (qOverride ?? question).trim();
     if (!q) return;
+    console.log('[wubble app] runAsk start, audio:', !!opts.audio, 'q:', q);
     setError('');
     setAnswer('');
     setLoading(true);
@@ -208,12 +230,15 @@ export default function App() {
         setAnswer(data.answer || '(empty response)');
       }
     } catch (e) {
+      console.error('[wubble app] runAsk error:', e);
       setError(e.message);
       if (getAudioState() !== 'idle') transition('idle');
     } finally {
       setLoading(false);
     }
   }, [question, transition]);
+
+  useEffect(() => { runAskRef.current = runAsk; }, [runAsk]);
 
   function handleMicClick() {
     if (audioState === 'listening') {
