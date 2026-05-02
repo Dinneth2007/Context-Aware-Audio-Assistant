@@ -117,7 +117,11 @@ router.post('/chat', async (req, res) => {
       const stream = await getAI().models.generateContentStream({
         model: MODEL_NAME,
         contents,
-        config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.3 },
+        config: {
+          systemInstruction: SYSTEM_PROMPT,
+          temperature: 0.3,
+          thinkingConfig: { thinkingBudget: 0 },
+        },
       });
       console.log('[wubble server] stream opened, type:', typeof stream, 'isAsyncIter:', typeof stream?.[Symbol.asyncIterator]);
       let chunkCount = 0;
@@ -147,7 +151,11 @@ router.post('/chat', async (req, res) => {
           const resp = await getAI().models.generateContent({
             model: MODEL_NAME,
             contents,
-            config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.3 },
+            config: {
+          systemInstruction: SYSTEM_PROMPT,
+          temperature: 0.3,
+          thinkingConfig: { thinkingBudget: 0 },
+        },
           });
           const finalText = chunkText(resp);
           console.log('[wubble server] streaming was empty; non-streaming chars:', finalText.length);
