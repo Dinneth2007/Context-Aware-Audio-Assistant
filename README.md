@@ -4,7 +4,7 @@ Context Aware Reading-Audio Assistant
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-▸ [Watch the 90-second demo](VIDEO_URL_PLACEHOLDER)
+▸ [Watch the 90-second demo](https://www.loom.com/share/989dd12e25304bceb2953746311ca80f)
 
 Wubble is a Chrome extension that helps you understand what you're reading. It answers about the specific section you're focused on — by selection, hover, or viewport dwell — and briefly highlights that section so you can verify the grounding.
 
