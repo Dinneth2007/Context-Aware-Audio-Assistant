@@ -1,20 +1,34 @@
 import { Router } from 'express';
 import { GoogleGenAI } from '@google/genai';
+import OpenAI from 'openai';
 
-// gemini-2.0-flash: reliable streaming. gemini-2.5-flash returned empty
-// streams (thinking-mode side effect) and intermittent 503s in this SDK
-// path; revisit once the new genai SDK stabilizes 2.5 streaming.
-const MODEL_NAME = 'gemini-2.0-flash';
+// Provider selection — set LLM_PROVIDER=groq or =gemini in server/.env.
+// Default groq because the free tier is far more generous than Gemini's.
+const PROVIDER = (process.env.LLM_PROVIDER || 'groq').toLowerCase();
 
-let ai = null;
-function getAI() {
-  if (!ai) ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  return ai;
+const MODELS = {
+  groq:   'llama-3.3-70b-versatile',
+  gemini: 'gemini-2.0-flash',
+};
+const MODEL_NAME = MODELS[PROVIDER] || MODELS.groq;
+
+let geminiClient = null;
+let groqClient = null;
+
+function getGemini() {
+  if (!geminiClient) geminiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  return geminiClient;
+}
+function getGroq() {
+  if (!groqClient) groqClient = new OpenAI({
+    apiKey: process.env.GROQ_API_KEY,
+    baseURL: 'https://api.groq.com/openai/v1',
+  });
+  return groqClient;
 }
 
 function chunkText(chunk) {
   if (!chunk) return '';
-  // .text getter (new SDK) or .text() method (old SDK)
   try {
     if (typeof chunk.text === 'function') {
       const t = chunk.text();
@@ -23,7 +37,6 @@ function chunkText(chunk) {
       return chunk.text;
     }
   } catch {}
-  // Defensive: walk candidates → content.parts[].text
   const cands = chunk.candidates || chunk.response?.candidates || [];
   let out = '';
   for (const c of cands) {
@@ -32,8 +45,6 @@ function chunkText(chunk) {
   }
   return out;
 }
-
-const router = Router();
 
 const SYSTEM_PROMPT = `You are Wubble, a concise reading assistant embedded in a browser sidebar.
 
@@ -96,6 +107,59 @@ function buildUserContent(payload, question) {
   return `${formatPayload(payload)}\n\nQuestion: ${question}`;
 }
 
+// ---------- Provider adapters ----------
+// Each yields plain text fragments. Server packs them into SSE.
+async function* streamGenerate(userText) {
+  if (PROVIDER === 'gemini') {
+    const stream = await getGemini().models.generateContentStream({
+      model: MODEL_NAME,
+      contents: [{ role: 'user', parts: [{ text: userText }] }],
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        temperature: 0.3,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+    });
+    for await (const chunk of stream) yield chunkText(chunk);
+    return;
+  }
+  // groq (OpenAI-compatible)
+  const stream = await getGroq().chat.completions.create({
+    model: MODEL_NAME,
+    temperature: 0.3,
+    stream: true,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: userText },
+    ],
+  });
+  for await (const chunk of stream) {
+    yield chunk.choices?.[0]?.delta?.content || '';
+  }
+}
+
+async function generateOnce(userText) {
+  if (PROVIDER === 'gemini') {
+    const resp = await getGemini().models.generateContent({
+      model: MODEL_NAME,
+      contents: [{ role: 'user', parts: [{ text: userText }] }],
+      config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.3 },
+    });
+    return { text: chunkText(resp), usage: resp.usageMetadata || null };
+  }
+  const resp = await getGroq().chat.completions.create({
+    model: MODEL_NAME,
+    temperature: 0.3,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: userText },
+    ],
+  });
+  return { text: resp.choices?.[0]?.message?.content || '', usage: resp.usage || null };
+}
+
+const router = Router();
+
 router.post('/chat', async (req, res) => {
   const { payload, question, stream } = req.body || {};
   if (!question || typeof question !== 'string') {
@@ -103,7 +167,6 @@ router.post('/chat', async (req, res) => {
   }
 
   const userText = buildUserContent(payload, question);
-  const contents = [{ role: 'user', parts: [{ text: userText }] }];
 
   if (stream) {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -121,41 +184,19 @@ router.post('/chat', async (req, res) => {
         res.write(`event: meta\ndata: ${JSON.stringify({ sectionId: groundedId })}\n\n`);
       }
 
-      const stream = await getAI().models.generateContentStream({
-        model: MODEL_NAME,
-        contents,
-        config: {
-          systemInstruction: SYSTEM_PROMPT,
-          temperature: 0.3,
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      });
       let emittedChars = 0;
-      for await (const chunk of stream) {
+      for await (const text of streamGenerate(userText)) {
         if (aborted) break;
-        const token = chunkText(chunk);
-        if (token) {
-          emittedChars += token.length;
-          res.write(`data: ${JSON.stringify({ token })}\n\n`);
+        if (text) {
+          emittedChars += text.length;
+          res.write(`data: ${JSON.stringify({ token: text })}\n\n`);
         }
       }
 
-      // Fallback: if streaming yielded no visible text (e.g. a model
-      // routes content through a path our chunk reader misses),
-      // do a non-streaming call and emit the whole answer as one token.
       if (!aborted && emittedChars === 0) {
         try {
-          const resp = await getAI().models.generateContent({
-            model: MODEL_NAME,
-            contents,
-            config: {
-              systemInstruction: SYSTEM_PROMPT,
-              temperature: 0.3,
-              thinkingConfig: { thinkingBudget: 0 },
-            },
-          });
-          const finalText = chunkText(resp);
-          if (finalText) res.write(`data: ${JSON.stringify({ token: finalText })}\n\n`);
+          const { text } = await generateOnce(userText);
+          if (text) res.write(`data: ${JSON.stringify({ token: text })}\n\n`);
         } catch (e) {
           console.error('[wubble server] non-streaming fallback failed:', e.message);
         }
@@ -172,16 +213,12 @@ router.post('/chat', async (req, res) => {
   }
 
   try {
-    const resp = await getAI().models.generateContent({
-      model: MODEL_NAME,
-      contents,
-      config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.3 },
-    });
-    const answer = chunkText(resp);
+    const { text, usage } = await generateOnce(userText);
     res.json({
-      answer,
+      answer: text,
       model: MODEL_NAME,
-      usage: resp.usageMetadata || null,
+      provider: PROVIDER,
+      usage,
       focusSource: payload?.source || null,
       focusHeading: payload?.section?.heading || null,
     });
@@ -190,5 +227,7 @@ router.post('/chat', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+console.log(`[wubble server] LLM provider: ${PROVIDER} (${MODEL_NAME})`);
 
 export default router;

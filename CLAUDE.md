@@ -17,10 +17,12 @@ dwell time) and lets them ask voice or text questions about it.
 
 ## Stack
 - Frontend: React 18, Vite, TailwindCSS, plain JS (no TypeScript)
-- Backend: Node 20+, Express, @google/generative-ai
+- Backend: Node 20+, Express, @google/genai or openai SDK
 - Audio: Web Speech API (webkitSpeechRecognition for STT) + browser
   speechSynthesis for TTS. ElevenLabs may be added later if time permits.
-- LLM: Google Gemini 2.5 Flash
+- LLM: pluggable via LLM_PROVIDER env var.
+  - groq (default): llama-3.3-70b-versatile via Groq's OpenAI-compatible API
+  - gemini: gemini-2.0-flash via @google/genai
 
 ## Constraints I'm working under
 - 2-day hackathon, solo developer

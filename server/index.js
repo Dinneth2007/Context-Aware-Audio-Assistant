@@ -4,8 +4,10 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-if (!process.env.GEMINI_API_KEY) {
-  console.warn('[wubble server] GEMINI_API_KEY is not set. Copy .env.example to .env and fill it in.');
+const PROVIDER = (process.env.LLM_PROVIDER || 'groq').toLowerCase();
+const REQUIRED_KEY = PROVIDER === 'gemini' ? 'GEMINI_API_KEY' : 'GROQ_API_KEY';
+if (!process.env[REQUIRED_KEY]) {
+  console.warn(`[wubble server] ${REQUIRED_KEY} is not set (LLM_PROVIDER=${PROVIDER}). Copy .env.example to .env and fill it in.`);
 }
 
 const { default: chatRouter } = await import('./routes/chat.js');
