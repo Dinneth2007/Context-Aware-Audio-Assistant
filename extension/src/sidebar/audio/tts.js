@@ -27,13 +27,18 @@ export function speak(text) {
     const t = (text || '').trim();
     if (!t) return resolve();
     if (!('speechSynthesis' in window)) return reject(new Error('speechSynthesis unavailable'));
+    console.log('[wubble tts] speak() called, len:', t.length, 'paused:', window.speechSynthesis.paused, 'speaking:', window.speechSynthesis.speaking, 'voice:', pickedVoice?.name);
+    // Some browsers (and side-panel contexts) leave speechSynthesis paused
+    // after long idles. Defensive resume before queueing.
+    try { window.speechSynthesis.resume(); } catch {}
     const utt = new SpeechSynthesisUtterance(t);
     if (pickedVoice) utt.voice = pickedVoice;
     utt.rate = 1.0;
     utt.pitch = 1.0;
-    utt.onend = () => resolve();
+    utt.onstart = () => console.log('[wubble tts] utterance start');
+    utt.onend = () => { console.log('[wubble tts] utterance end'); resolve(); };
     utt.onerror = (e) => {
-      // 'interrupted'/'canceled' fires on cancel(); treat as resolved.
+      console.warn('[wubble tts] utterance error:', e.error);
       if (e.error === 'interrupted' || e.error === 'canceled') return resolve();
       reject(new Error(`speechSynthesis: ${e.error || 'unknown'}`));
     };
