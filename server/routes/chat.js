@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import { GoogleGenAI } from '@google/genai';
 
-const MODEL_NAME = 'gemini-2.5-flash';
+// gemini-2.0-flash: reliable streaming. gemini-2.5-flash returned empty
+// streams (thinking-mode side effect) and intermittent 503s in this SDK
+// path; revisit once the new genai SDK stabilizes 2.5 streaming.
+const MODEL_NAME = 'gemini-2.0-flash';
 
 let ai = null;
 function getAI() {
