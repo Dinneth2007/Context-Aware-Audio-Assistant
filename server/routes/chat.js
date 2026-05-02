@@ -189,30 +189,19 @@ router.post('/chat', async (req, res) => {
 
     try {
       const groundedId = payload?.section?.id || null;
-      if (groundedId) {
-        res.write(`event: meta\ndata: ${JSON.stringify({ sectionId: groundedId })}\n\n`);
+      const groundedHeading = payload?.section?.heading || null;
+      if (groundedId || groundedHeading) {
+        res.write(`event: meta\ndata: ${JSON.stringify({ sectionId: groundedId, heading: groundedHeading })}\n\n`);
       }
 
-      let emittedChars = 0;
-      for await (const text of streamGenerate(userText)) {
-        if (aborted) break;
-        if (text) {
-          emittedChars += text.length;
-          res.write(`data: ${JSON.stringify({ token: text })}\n\n`);
-        }
+      // Fetch the answer in one shot (Groq's streaming path was producing
+      // only the role-establishing first chunk in our setup; non-streaming
+      // is rock-solid and the sidebar's sentence buffer still splits the
+      // answer back out for sentence-by-sentence TTS).
+      const { text } = await generateOnce(userText);
+      if (!aborted && text) {
+        res.write(`data: ${JSON.stringify({ token: text })}\n\n`);
       }
-      console.log('[wubble server] stream branch emittedChars:', emittedChars);
-
-      if (!aborted && emittedChars === 0) {
-        try {
-          const { text } = await generateOnce(userText);
-          console.log('[wubble server] fallback returned chars:', (text || '').length);
-          if (text) res.write(`data: ${JSON.stringify({ token: text })}\n\n`);
-        } catch (e) {
-          console.error('[wubble server] non-streaming fallback failed:', e.message);
-        }
-      }
-
       if (!aborted) res.write('data: [DONE]\n\n');
     } catch (err) {
       console.error('[wubble server] /api/chat stream error:', err);

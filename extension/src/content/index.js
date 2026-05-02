@@ -109,23 +109,16 @@ function ensureHighlightStyle() {
   (document.head || document.documentElement).appendChild(s);
 }
 
-function highlightSection(sectionId) {
-  if (!sectionId) {
-    console.log('[wubble content] highlight: no sectionId');
-    return;
+function highlightSection(sectionId, heading) {
+  if (!sectionId && !heading) return;
+  let target = sectionId ? currentSections.find((s) => s.id === sectionId) : null;
+  if (!target && heading) {
+    const needle = heading.trim().toLowerCase();
+    target = currentSections.find((s) => (s.heading || '').trim().toLowerCase() === needle);
   }
-  const target = currentSections.find((s) => s.id === sectionId);
-  if (!target?.element) {
-    console.log(
-      '[wubble content] highlight: no match for', sectionId,
-      '— knownIds:', currentSections.map((s) => s.id).slice(0, 5)
-    );
-    return;
-  }
-  console.log('[wubble content] highlight:', target.heading, '→ scrolling into view + animating');
+  if (!target?.element) return;
+
   ensureHighlightStyle();
-  // Scroll into view if the section is offscreen, so the user actually
-  // sees the animation fire.
   try {
     const rect = target.element.getBoundingClientRect();
     if (rect.bottom < 0 || rect.top > window.innerHeight) {
@@ -190,7 +183,7 @@ function onRuntimeMessage(msg, _sender, sendResponse) {
   }
 
   if (msg.type === 'WUBBLE_HIGHLIGHT') {
-    try { highlightSection(msg.sectionId); } catch {}
+    try { highlightSection(msg.sectionId, msg.heading); } catch {}
     return; // no response needed
   }
 

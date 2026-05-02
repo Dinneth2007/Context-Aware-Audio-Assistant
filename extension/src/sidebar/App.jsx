@@ -311,9 +311,9 @@ export default function App() {
       const payload = buildContextPayload(r.focus);
       setFocus(r.focus);
 
-      const triggerHighlight = (sectionId) => {
-        console.log('[wubble app] triggerHighlight →', sectionId, 'tab', tab.id);
-        if (sectionId) sendToTab(tab.id, { type: 'WUBBLE_HIGHLIGHT', sectionId });
+      const triggerHighlight = (sectionId, heading) => {
+        if (!sectionId && !heading) return;
+        sendToTab(tab.id, { type: 'WUBBLE_HIGHLIGHT', sectionId, heading });
       };
 
       if (opts.audio) {
@@ -324,12 +324,9 @@ export default function App() {
         let buffer = '';
         let firstToken = true;
         let tokenCount = 0;
-        let speakCallCount = 0;
         const speakPromises = [];
         const speakOne = (s) => {
-          speakCallCount++;
-          console.log('[wubble app] speak() #' + speakCallCount + ':', s.slice(0, 50));
-          speakPromises.push(tts.speak(s).catch((e) => console.warn('[wubble app] speak rejected:', e.message)));
+          speakPromises.push(tts.speak(s).catch(() => {}));
         };
 
         try {
@@ -337,12 +334,11 @@ export default function App() {
             payload,
             question: q,
             signal: ac.signal,
-            onMeta: (m) => triggerHighlight(m?.sectionId),
+            onMeta: (m) => triggerHighlight(m?.sectionId, m?.heading),
             onToken: (tok) => {
               tokenCount++;
               if (firstToken) {
                 firstToken = false;
-                console.log('[wubble app] first token, transitioning to speaking');
                 if (getAudioState() === 'thinking') transition('speaking');
               }
               setAnswer((prev) => prev + tok);
@@ -354,11 +350,9 @@ export default function App() {
           if (err.name === 'AbortError') return;
           throw err;
         }
-        console.log('[wubble app] stream done. tokens:', tokenCount, 'speakCalls:', speakCallCount, 'tailLen:', buffer.trim().length);
         const tail = buffer.trim();
         if (tail) speakOne(tail);
         await Promise.allSettled(speakPromises);
-        console.log('[wubble app] all speak promises settled');
         clearAbortController();
         if (getAudioState() === 'speaking' || getAudioState() === 'thinking') {
           transition('idle');
