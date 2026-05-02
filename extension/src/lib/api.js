@@ -16,12 +16,14 @@ export async function askAboutPage({ payload, question }) {
 // Streams SSE tokens from /api/chat. onToken is called with each text fragment.
 // Resolves when the server emits [DONE]. Throws on abort or server error event.
 export async function streamAsk({ payload, question, signal, onToken }) {
+  console.log('[wubble api] streamAsk: opening stream');
   const res = await fetch(`${SERVER_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify({ payload, question, stream: true }),
     signal,
   });
+  console.log('[wubble api] streamAsk: response status', res.status);
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Server ${res.status}: ${text || res.statusText}`);
@@ -31,6 +33,7 @@ export async function streamAsk({ payload, question, signal, onToken }) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  let tokenCount = 0;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -44,15 +47,23 @@ export async function streamAsk({ payload, question, signal, onToken }) {
       const dataLine = event.split('\n').find((l) => l.startsWith('data:'));
       if (!dataLine) continue;
       const payloadStr = dataLine.slice(5).trim();
-      if (payloadStr === '[DONE]') return;
+      if (payloadStr === '[DONE]') {
+        console.log('[wubble api] streamAsk: DONE,', tokenCount, 'tokens');
+        return;
+      }
       try {
         const obj = JSON.parse(payloadStr);
         if (obj.error) throw new Error(obj.error);
-        if (obj.token) onToken(obj.token);
+        if (obj.token) {
+          if (tokenCount === 0) console.log('[wubble api] streamAsk: first token');
+          tokenCount++;
+          onToken(obj.token);
+        }
       } catch (e) {
         if (e instanceof SyntaxError) continue;
         throw e;
       }
     }
   }
+  console.log('[wubble api] streamAsk: stream ended without [DONE],', tokenCount, 'tokens');
 }
