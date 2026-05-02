@@ -1,20 +1,19 @@
 import { Router } from 'express';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 
-// gemini-2.0-flash: stable streaming via the @google/generative-ai SDK.
-// gemini-2.5-flash routes some content through thinking-token paths that
-// chunk.text() doesn't surface in this SDK version, producing empty
-// streams even though non-streaming aggregation works.
-const MODEL_NAME = 'gemini-2.0-flash';
+const MODEL_NAME = 'gemini-2.5-flash';
 
-let genai = null;
-function getModel() {
-  if (!genai) genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  return genai.getGenerativeModel({
-    model: MODEL_NAME,
-    systemInstruction: SYSTEM_PROMPT,
-    generationConfig: { temperature: 0.3 },
-  });
+let ai = null;
+function getAI() {
+  if (!ai) ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  return ai;
+}
+
+function chunkText(chunk) {
+  if (!chunk) return '';
+  if (typeof chunk.text === 'function') return chunk.text() || '';
+  if (typeof chunk.text === 'string') return chunk.text;
+  return '';
 }
 
 const router = Router();
@@ -100,14 +99,18 @@ router.post('/chat', async (req, res) => {
     req.on('close', () => { aborted = true; });
 
     try {
-      const result = await getModel().generateContentStream({ contents });
+      const stream = await getAI().models.generateContentStream({
+        model: MODEL_NAME,
+        contents,
+        config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.3 },
+      });
       let chunkCount = 0;
       let emittedChars = 0;
-      for await (const chunk of result.stream) {
+      for await (const chunk of stream) {
         if (aborted) break;
         chunkCount++;
-        const token = typeof chunk.text === 'function' ? chunk.text() : '';
-        console.log('[wubble server] chunk', chunkCount, 'text len:', (token || '').length);
+        const token = chunkText(chunk);
+        console.log('[wubble server] chunk', chunkCount, 'text len:', token.length);
         if (token) {
           emittedChars += token.length;
           res.write(`data: ${JSON.stringify({ token })}\n\n`);
@@ -115,19 +118,20 @@ router.post('/chat', async (req, res) => {
       }
       console.log('[wubble server] stream loop done. chunks:', chunkCount, 'emittedChars:', emittedChars);
 
-      // Fallback: if streaming produced nothing, drain the aggregated
-      // response (useful when 2.5 models route content through paths
-      // where chunk.text() comes back empty in this SDK).
+      // Last-resort fallback: if streaming produced no visible chars,
+      // do a non-streaming call and emit the whole answer as one token.
       if (!aborted && emittedChars === 0) {
         try {
-          const finalResp = await result.response;
-          const finalText = typeof finalResp.text === 'function' ? finalResp.text() : '';
-          console.log('[wubble server] streaming was empty; final response chars:', (finalText || '').length);
-          if (finalText) {
-            res.write(`data: ${JSON.stringify({ token: finalText })}\n\n`);
-          }
+          const resp = await getAI().models.generateContent({
+            model: MODEL_NAME,
+            contents,
+            config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.3 },
+          });
+          const finalText = chunkText(resp);
+          console.log('[wubble server] streaming was empty; non-streaming chars:', finalText.length);
+          if (finalText) res.write(`data: ${JSON.stringify({ token: finalText })}\n\n`);
         } catch (e) {
-          console.error('[wubble server] final-response fallback failed:', e.message);
+          console.error('[wubble server] non-streaming fallback failed:', e.message);
         }
       }
 
@@ -142,13 +146,16 @@ router.post('/chat', async (req, res) => {
   }
 
   try {
-    const result = await getModel().generateContent({ contents });
-    const answer = result.response.text();
-    const usage = result.response.usageMetadata || null;
+    const resp = await getAI().models.generateContent({
+      model: MODEL_NAME,
+      contents,
+      config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.3 },
+    });
+    const answer = chunkText(resp);
     res.json({
       answer,
       model: MODEL_NAME,
-      usage,
+      usage: resp.usageMetadata || null,
       focusSource: payload?.source || null,
       focusHeading: payload?.section?.heading || null,
     });
