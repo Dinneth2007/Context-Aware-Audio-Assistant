@@ -128,14 +128,20 @@ async function* streamGenerate(userText) {
     model: MODEL_NAME,
     temperature: 0.3,
     stream: true,
+    max_tokens: 600,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userText },
     ],
   });
+  let chunkN = 0;
   for await (const chunk of stream) {
-    yield chunk.choices?.[0]?.delta?.content || '';
+    chunkN++;
+    const piece = chunk.choices?.[0]?.delta?.content || '';
+    if (chunkN === 1) console.log('[wubble server] groq first chunk:', JSON.stringify(chunk).slice(0, 400));
+    yield piece;
   }
+  console.log('[wubble server] groq stream done, chunks:', chunkN);
 }
 
 async function generateOnce(userText) {
@@ -150,12 +156,15 @@ async function generateOnce(userText) {
   const resp = await getGroq().chat.completions.create({
     model: MODEL_NAME,
     temperature: 0.3,
+    max_tokens: 600,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userText },
     ],
   });
-  return { text: resp.choices?.[0]?.message?.content || '', usage: resp.usage || null };
+  const text = resp.choices?.[0]?.message?.content || '';
+  console.log('[wubble server] groq non-streaming chars:', text.length, 'finish:', resp.choices?.[0]?.finish_reason);
+  return { text, usage: resp.usage || null };
 }
 
 const router = Router();
@@ -192,10 +201,12 @@ router.post('/chat', async (req, res) => {
           res.write(`data: ${JSON.stringify({ token: text })}\n\n`);
         }
       }
+      console.log('[wubble server] stream branch emittedChars:', emittedChars);
 
       if (!aborted && emittedChars === 0) {
         try {
           const { text } = await generateOnce(userText);
+          console.log('[wubble server] fallback returned chars:', (text || '').length);
           if (text) res.write(`data: ${JSON.stringify({ token: text })}\n\n`);
         } catch (e) {
           console.error('[wubble server] non-streaming fallback failed:', e.message);
