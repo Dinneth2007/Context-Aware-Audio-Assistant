@@ -11,9 +11,23 @@ function getAI() {
 
 function chunkText(chunk) {
   if (!chunk) return '';
-  if (typeof chunk.text === 'function') return chunk.text() || '';
-  if (typeof chunk.text === 'string') return chunk.text;
-  return '';
+  // .text getter (new SDK) or .text() method (old SDK)
+  try {
+    if (typeof chunk.text === 'function') {
+      const t = chunk.text();
+      if (t) return t;
+    } else if (typeof chunk.text === 'string' && chunk.text) {
+      return chunk.text;
+    }
+  } catch {}
+  // Defensive: walk candidates → content.parts[].text
+  const cands = chunk.candidates || chunk.response?.candidates || [];
+  let out = '';
+  for (const c of cands) {
+    const parts = c?.content?.parts || [];
+    for (const p of parts) if (typeof p?.text === 'string') out += p.text;
+  }
+  return out;
 }
 
 const router = Router();
@@ -99,16 +113,24 @@ router.post('/chat', async (req, res) => {
     req.on('close', () => { aborted = true; });
 
     try {
+      console.log('[wubble server] opening stream, model:', MODEL_NAME);
       const stream = await getAI().models.generateContentStream({
         model: MODEL_NAME,
         contents,
         config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.3 },
       });
+      console.log('[wubble server] stream opened, type:', typeof stream, 'isAsyncIter:', typeof stream?.[Symbol.asyncIterator]);
       let chunkCount = 0;
       let emittedChars = 0;
       for await (const chunk of stream) {
         if (aborted) break;
         chunkCount++;
+        if (chunkCount === 1) {
+          try {
+            console.log('[wubble server] first chunk keys:', Object.keys(chunk));
+            console.log('[wubble server] first chunk JSON:', JSON.stringify(chunk).slice(0, 1500));
+          } catch (e) { console.log('[wubble server] could not stringify first chunk:', e.message); }
+        }
         const token = chunkText(chunk);
         console.log('[wubble server] chunk', chunkCount, 'text len:', token.length);
         if (token) {
