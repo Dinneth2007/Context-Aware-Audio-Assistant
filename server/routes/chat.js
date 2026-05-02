@@ -107,43 +107,12 @@ function buildUserContent(payload, question) {
   return `${formatPayload(payload)}\n\nQuestion: ${question}`;
 }
 
-// ---------- Provider adapters ----------
-// Each yields plain text fragments. Server packs them into SSE.
-async function* streamGenerate(userText) {
-  if (PROVIDER === 'gemini') {
-    const stream = await getGemini().models.generateContentStream({
-      model: MODEL_NAME,
-      contents: [{ role: 'user', parts: [{ text: userText }] }],
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        temperature: 0.3,
-        thinkingConfig: { thinkingBudget: 0 },
-      },
-    });
-    for await (const chunk of stream) yield chunkText(chunk);
-    return;
-  }
-  // groq (OpenAI-compatible)
-  const stream = await getGroq().chat.completions.create({
-    model: MODEL_NAME,
-    temperature: 0.3,
-    stream: true,
-    max_tokens: 600,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: userText },
-    ],
-  });
-  let chunkN = 0;
-  for await (const chunk of stream) {
-    chunkN++;
-    const piece = chunk.choices?.[0]?.delta?.content || '';
-    if (chunkN === 1) console.log('[wubble server] groq first chunk:', JSON.stringify(chunk).slice(0, 400));
-    yield piece;
-  }
-  console.log('[wubble server] groq stream done, chunks:', chunkN);
-}
-
+// Single-shot generation. The /api/chat stream branch wraps this in SSE
+// so the sidebar's streamAsk parser path still works, but we don't do
+// live token streaming — Groq's streaming path was unreliable in our
+// pipeline (only emitted the role-establishing chunk before the request
+// closed) and Gemini 2.5 had its own thinking-mode quirks. Non-streaming
+// works on both providers; revisit when one of them becomes solid.
 async function generateOnce(userText) {
   if (PROVIDER === 'gemini') {
     const resp = await getGemini().models.generateContent({
@@ -162,9 +131,10 @@ async function generateOnce(userText) {
       { role: 'user', content: userText },
     ],
   });
-  const text = resp.choices?.[0]?.message?.content || '';
-  console.log('[wubble server] groq non-streaming chars:', text.length, 'finish:', resp.choices?.[0]?.finish_reason);
-  return { text, usage: resp.usage || null };
+  return {
+    text: resp.choices?.[0]?.message?.content || '',
+    usage: resp.usage || null,
+  };
 }
 
 const router = Router();
