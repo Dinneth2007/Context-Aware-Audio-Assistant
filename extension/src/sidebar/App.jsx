@@ -62,27 +62,6 @@ function StateIndicator({ state }) {
   );
 }
 
-function VoiceToggle({ backend, onChange }) {
-  return (
-    <div className="flex text-[11px] border border-slate-300 rounded-full overflow-hidden">
-      <button
-        type="button"
-        onClick={() => onChange('browser')}
-        className={`px-2 py-1 ${backend === 'browser' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600'}`}
-      >
-        Browser
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange('openai')}
-        className={`px-2 py-1 ${backend === 'openai' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600'}`}
-      >
-        Premium
-      </button>
-    </div>
-  );
-}
-
 function flushSentences(buffer, sink) {
   const re = /[.!?]+[)"'\]]?\s+/g;
   let lastIndex = 0;
@@ -102,17 +81,14 @@ export default function App() {
   const [answer, setAnswer] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [toast, setToast] = useState('');
   const [focus, setFocus] = useState(null);
   const [activeTabId, setActiveTabId] = useState(null);
-  const [voiceBackend, setVoiceBackend] = useState(tts.getBackend());
 
   const { state: audioState, transition } = useAudioState();
   const sttRef = useRef(null);
   const focusDebounce = useRef(null);
   const speakerSpeakingRef = useRef(false);
 
-  // Initial focus pull.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -125,7 +101,6 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // Live focus updates.
   useEffect(() => {
     function onMsg(msg, sender) {
       if (msg?.type !== 'FOCUS_CHANGE') return;
@@ -140,7 +115,6 @@ export default function App() {
     };
   }, [activeTabId]);
 
-  // Active tab tracking.
   useEffect(() => {
     function onActivated({ tabId }) {
       setActiveTabId(tabId);
@@ -150,16 +124,6 @@ export default function App() {
     return () => chrome.tabs.onActivated.removeListener(onActivated);
   }, []);
 
-  // Voice backend subscription.
-  useEffect(() => tts.onBackendChange(setVoiceBackend), []);
-
-  // Toast for premium TTS fallback.
-  useEffect(() => tts.onFallback((reason) => {
-    setToast(`Premium voice unavailable — using browser voice. (${reason})`);
-    setTimeout(() => setToast(''), 4000);
-  }), []);
-
-  // Build STT instance once and bind to state machine.
   useEffect(() => {
     if (!isSTTAvailable()) return;
     const stt = createSTT();
@@ -170,7 +134,6 @@ export default function App() {
     const offFinal = stt.on('final', (t) => {
       setInterim('');
       setQuestion(t);
-      // Auto-submit the final transcript.
       runAsk(t, { audio: true });
     });
     const offError = stt.on('error', (e) => {
@@ -180,7 +143,6 @@ export default function App() {
     });
     const offEnd = stt.on('end', () => {
       setInterim('');
-      // If we're still in 'listening' (no final fired), drop to idle.
       if (getAudioState() === 'listening') transition('idle');
     });
 
@@ -205,11 +167,7 @@ export default function App() {
       if (opts.audio) {
         const ac = new AbortController();
         bindAbortController(ac);
-        if (getAudioState() !== 'thinking' && getAudioState() !== 'speaking') {
-          transition('thinking');
-        } else {
-          transition('thinking');
-        }
+        transition('thinking');
 
         let buffer = '';
         let firstToken = true;
@@ -286,12 +244,9 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col bg-slate-50 text-slate-900">
-      <header className="px-4 py-3 border-b bg-white flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold">Wubble</h1>
-          <p className="text-xs text-slate-500">Context-aware reader assistant</p>
-        </div>
-        <VoiceToggle backend={voiceBackend} onChange={(b) => tts.setBackend(b)} />
+      <header className="px-4 py-3 border-b bg-white">
+        <h1 className="text-lg font-semibold">Wubble</h1>
+        <p className="text-xs text-slate-500">Context-aware reader assistant</p>
       </header>
 
       <div className="px-4 pt-3 flex items-center justify-between gap-2">
@@ -338,12 +293,6 @@ export default function App() {
             </button>
           )}
         </div>
-
-        {toast && (
-          <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 p-2 rounded">
-            {toast}
-          </div>
-        )}
 
         {error && (
           <div className="text-red-700 text-sm bg-red-50 border border-red-200 p-2 rounded">

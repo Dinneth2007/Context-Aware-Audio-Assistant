@@ -1,7 +1,5 @@
 const SERVER_URL = 'http://localhost:3001';
 
-export const TTS_ENDPOINT = `${SERVER_URL}/api/tts`;
-
 export async function askAboutPage({ payload, question }) {
   const res = await fetch(`${SERVER_URL}/api/chat`, {
     method: 'POST',

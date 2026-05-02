@@ -12,15 +12,15 @@ dwell time) and lets them ask voice or text questions about it.
   - `src/sidebar/` — React sidebar UI (side panel API)
   - `src/background/` — MV3 service worker
   - `src/lib/` — shared utilities (context extraction, audio, api client)
-- `server/` — Express backend that proxies LLM and TTS calls
+- `server/` — Express backend that proxies LLM calls
   - Never expose API keys in the extension; everything goes through here
 
 ## Stack
 - Frontend: React 18, Vite, TailwindCSS, plain JS (no TypeScript)
-- Backend: Node 20+, Express, OpenAI SDK
-- Audio: Web Speech API (STT), starts with speechSynthesis, swaps to
-  OpenAI TTS later
-- LLM: OpenAI gpt-4o-mini and gpt-4o
+- Backend: Node 20+, Express, @google/generative-ai
+- Audio: Web Speech API (webkitSpeechRecognition for STT) + browser
+  speechSynthesis for TTS. ElevenLabs may be added later if time permits.
+- LLM: Google Gemini 2.5 Flash
 
 ## Constraints I'm working under
 - 2-day hackathon, solo developer

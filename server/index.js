@@ -4,12 +4,11 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-if (!process.env.OPENAI_API_KEY) {
-  console.warn('[wubble server] OPENAI_API_KEY is not set. Copy .env.example to .env and fill it in.');
+if (!process.env.GEMINI_API_KEY) {
+  console.warn('[wubble server] GEMINI_API_KEY is not set. Copy .env.example to .env and fill it in.');
 }
 
 const { default: chatRouter } = await import('./routes/chat.js');
-const { default: ttsRouter } = await import('./routes/tts.js');
 
 const app = express();
 app.use(cors());
@@ -17,7 +16,6 @@ app.use(express.json({ limit: '5mb' }));
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api', chatRouter);
-app.use('/api', ttsRouter);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {

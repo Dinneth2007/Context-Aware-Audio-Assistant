@@ -1,11 +1,16 @@
 import { Router } from 'express';
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-let openaiClient = null;
-function getOpenAI() {
-  if (!openaiClient) openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  return openaiClient;
+let genai = null;
+function getModel() {
+  if (!genai) genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  return genai.getGenerativeModel({
+    model: 'gemini-2.5-flash',
+    systemInstruction: SYSTEM_PROMPT,
+    generationConfig: { temperature: 0.3 },
+  });
 }
+
 const router = Router();
 
 const SYSTEM_PROMPT = `You are Wubble, a concise reading assistant embedded in a browser sidebar.
@@ -65,11 +70,8 @@ function formatPayload(payload) {
   return lines.join('\n');
 }
 
-function buildMessages(payload, question) {
-  return [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: `${formatPayload(payload)}\n\nQuestion: ${question}` },
-  ];
+function buildUserContent(payload, question) {
+  return `${formatPayload(payload)}\n\nQuestion: ${question}`;
 }
 
 router.post('/chat', async (req, res) => {
@@ -77,6 +79,9 @@ router.post('/chat', async (req, res) => {
   if (!question || typeof question !== 'string') {
     return res.status(400).json({ error: 'question (string) is required' });
   }
+
+  const userText = buildUserContent(payload, question);
+  const contents = [{ role: 'user', parts: [{ text: userText }] }];
 
   if (stream) {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -89,15 +94,10 @@ router.post('/chat', async (req, res) => {
     req.on('close', () => { aborted = true; });
 
     try {
-      const completion = await getOpenAI().chat.completions.create({
-        model: 'gpt-4o-mini',
-        temperature: 0.3,
-        stream: true,
-        messages: buildMessages(payload, question),
-      });
-      for await (const chunk of completion) {
+      const result = await getModel().generateContentStream({ contents });
+      for await (const chunk of result.stream) {
         if (aborted) break;
-        const token = chunk.choices?.[0]?.delta?.content;
+        const token = chunk.text();
         if (token) res.write(`data: ${JSON.stringify({ token })}\n\n`);
       }
       if (!aborted) res.write('data: [DONE]\n\n');
@@ -111,16 +111,13 @@ router.post('/chat', async (req, res) => {
   }
 
   try {
-    const completion = await getOpenAI().chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.3,
-      messages: buildMessages(payload, question),
-    });
-
+    const result = await getModel().generateContent({ contents });
+    const answer = result.response.text();
+    const usage = result.response.usageMetadata || null;
     res.json({
-      answer: completion.choices[0]?.message?.content ?? '',
-      model: completion.model,
-      usage: completion.usage,
+      answer,
+      model: 'gemini-2.5-flash',
+      usage,
       focusSource: payload?.source || null,
       focusHeading: payload?.section?.heading || null,
     });
