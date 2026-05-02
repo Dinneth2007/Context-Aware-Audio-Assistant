@@ -133,7 +133,6 @@ export default function App() {
     bindSTT(stt);
 
     function submitTranscript(t) {
-      console.log('[wubble app] submitting transcript:', t);
       interimRef.current = '';
       setInterim('');
       setQuestion(t);
@@ -143,16 +142,11 @@ export default function App() {
     }
 
     const offInterim = stt.on('interim', (t) => {
-      console.log('[wubble app] interim:', t);
       interimRef.current = t;
       setInterim(t);
     });
-    const offFinal = stt.on('final', (t) => {
-      console.log('[wubble app] final received:', t);
-      submitTranscript(t);
-    });
+    const offFinal = stt.on('final', (t) => submitTranscript(t));
     const offError = stt.on('error', (e) => {
-      console.warn('[wubble app] stt error:', e);
       interimRef.current = '';
       setInterim('');
       setError(e.message);
@@ -160,7 +154,6 @@ export default function App() {
     });
     const offEnd = stt.on('end', () => {
       const lingering = (interimRef.current || '').trim();
-      console.log('[wubble app] stt end, lingering interim:', lingering, 'state:', getAudioState());
       if (lingering && getAudioState() === 'listening') {
         submitTranscript(lingering);
         return;
@@ -177,7 +170,6 @@ export default function App() {
   const runAsk = useCallback(async (qOverride, opts = {}) => {
     const q = (qOverride ?? question).trim();
     if (!q) return;
-    console.log('[wubble app] runAsk start, audio:', !!opts.audio, 'q:', q);
     setError('');
     setAnswer('');
     setLoading(true);

@@ -116,7 +116,6 @@ router.post('/chat', async (req, res) => {
     req.on('close', () => { aborted = true; });
 
     try {
-      console.log('[wubble server] opening stream, model:', MODEL_NAME);
       const stream = await getAI().models.generateContentStream({
         model: MODEL_NAME,
         contents,
@@ -126,28 +125,18 @@ router.post('/chat', async (req, res) => {
           thinkingConfig: { thinkingBudget: 0 },
         },
       });
-      console.log('[wubble server] stream opened, type:', typeof stream, 'isAsyncIter:', typeof stream?.[Symbol.asyncIterator]);
-      let chunkCount = 0;
       let emittedChars = 0;
       for await (const chunk of stream) {
         if (aborted) break;
-        chunkCount++;
-        if (chunkCount === 1) {
-          try {
-            console.log('[wubble server] first chunk keys:', Object.keys(chunk));
-            console.log('[wubble server] first chunk JSON:', JSON.stringify(chunk).slice(0, 1500));
-          } catch (e) { console.log('[wubble server] could not stringify first chunk:', e.message); }
-        }
         const token = chunkText(chunk);
-        console.log('[wubble server] chunk', chunkCount, 'text len:', token.length);
         if (token) {
           emittedChars += token.length;
           res.write(`data: ${JSON.stringify({ token })}\n\n`);
         }
       }
-      console.log('[wubble server] stream loop done. chunks:', chunkCount, 'emittedChars:', emittedChars);
 
-      // Last-resort fallback: if streaming produced no visible chars,
+      // Fallback: if streaming yielded no visible text (e.g. a model
+      // routes content through a path our chunk reader misses),
       // do a non-streaming call and emit the whole answer as one token.
       if (!aborted && emittedChars === 0) {
         try {
@@ -155,13 +144,12 @@ router.post('/chat', async (req, res) => {
             model: MODEL_NAME,
             contents,
             config: {
-          systemInstruction: SYSTEM_PROMPT,
-          temperature: 0.3,
-          thinkingConfig: { thinkingBudget: 0 },
-        },
+              systemInstruction: SYSTEM_PROMPT,
+              temperature: 0.3,
+              thinkingConfig: { thinkingBudget: 0 },
+            },
           });
           const finalText = chunkText(resp);
-          console.log('[wubble server] streaming was empty; non-streaming chars:', finalText.length);
           if (finalText) res.write(`data: ${JSON.stringify({ token: finalText })}\n\n`);
         } catch (e) {
           console.error('[wubble server] non-streaming fallback failed:', e.message);

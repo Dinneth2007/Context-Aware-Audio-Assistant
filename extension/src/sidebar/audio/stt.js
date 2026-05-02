@@ -42,7 +42,7 @@ export function createSTT() {
   rec.interimResults = true;
   rec.lang = 'en-US';
 
-  const SILENCE_MS = 1000; // stop manually if no new interim within this window
+  const SILENCE_MS = 1500; // stop manually if no new interim within this window
   const listeners = { interim: new Set(), final: new Set(), error: new Set(), end: new Set() };
   let running = false;
   let lastInterim = '';
@@ -58,7 +58,6 @@ export function createSTT() {
   function resetSilenceTimer() {
     if (silenceTimer) clearTimeout(silenceTimer);
     silenceTimer = setTimeout(() => {
-      console.log('[wubble stt] silence timer fired, stopping. lastInterim:', lastInterim);
       try { rec.stop(); } catch {}
     }, SILENCE_MS);
   }
@@ -92,19 +91,16 @@ export function createSTT() {
   };
 
   rec.onend = () => {
-    console.log('[wubble stt] onend, gotFinal:', gotFinal, 'lastInterim:', lastInterim);
     running = false;
     if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
     if (lastInterim && lastInterim.trim()) {
       const t = lastInterim.trim();
       lastInterim = '';
-      console.log('[wubble stt] promoting interim to final:', t);
       emit('final', t);
     }
     emit('end');
   };
   rec.onstart = () => {
-    console.log('[wubble stt] onstart');
     running = true;
     lastInterim = '';
     gotFinal = false;
