@@ -20,6 +20,6 @@
       "run_at": "document_idle"
     }
   ],
-  "permissions": ["sidePanel", "activeTab", "tabs", "scripting"],
+  "permissions": ["sidePanel", "activeTab", "tabs", "scripting", "tts", "storage"],
   "host_permissions": ["<all_urls>", "http://localhost:3001/*"]
 }

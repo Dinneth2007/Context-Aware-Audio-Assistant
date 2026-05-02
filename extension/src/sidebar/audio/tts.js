@@ -1,5 +1,6 @@
-// Browser-only TTS via window.speechSynthesis. Picks a reasonable
-// English voice on init.
+// Extension TTS via chrome.tts (no user-gesture restrictions, works
+// reliably in side panels). Falls back to window.speechSynthesis if
+// chrome.tts isn't available.
 
 let pickedVoice = null;
 
@@ -19,26 +20,42 @@ if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
   window.speechSynthesis.addEventListener('voiceschanged', refresh);
 }
 
-// Clear any leftover backend preference from the OpenAI-TTS era.
 try { chrome?.storage?.local?.remove?.('wubble.voice'); } catch {}
 
-export function speak(text) {
+function hasChromeTTS() {
+  return typeof chrome !== 'undefined' && chrome.tts && typeof chrome.tts.speak === 'function';
+}
+
+function speakViaChromeTTS(text) {
   return new Promise((resolve, reject) => {
-    const t = (text || '').trim();
-    if (!t) return resolve();
+    chrome.tts.speak(text, {
+      rate: 1.0,
+      pitch: 1.0,
+      volume: 1.0,
+      lang: 'en-US',
+      onEvent: (event) => {
+        if (event.type === 'end') resolve();
+        else if (event.type === 'cancelled' || event.type === 'interrupted') resolve();
+        else if (event.type === 'error') reject(new Error(event.errorMessage || 'tts error'));
+      },
+    });
+    // Surface enqueue-time errors via lastError.
+    if (chrome.runtime.lastError) {
+      reject(new Error(chrome.runtime.lastError.message || 'tts enqueue failed'));
+    }
+  });
+}
+
+function speakViaSynth(text) {
+  return new Promise((resolve, reject) => {
     if (!('speechSynthesis' in window)) return reject(new Error('speechSynthesis unavailable'));
-    console.log('[wubble tts] speak() called, len:', t.length, 'paused:', window.speechSynthesis.paused, 'speaking:', window.speechSynthesis.speaking, 'voice:', pickedVoice?.name);
-    // Some browsers (and side-panel contexts) leave speechSynthesis paused
-    // after long idles. Defensive resume before queueing.
     try { window.speechSynthesis.resume(); } catch {}
-    const utt = new SpeechSynthesisUtterance(t);
+    const utt = new SpeechSynthesisUtterance(text);
     if (pickedVoice) utt.voice = pickedVoice;
     utt.rate = 1.0;
     utt.pitch = 1.0;
-    utt.onstart = () => console.log('[wubble tts] utterance start');
-    utt.onend = () => { console.log('[wubble tts] utterance end'); resolve(); };
+    utt.onend = () => resolve();
     utt.onerror = (e) => {
-      console.warn('[wubble tts] utterance error:', e.error);
       if (e.error === 'interrupted' || e.error === 'canceled') return resolve();
       reject(new Error(`speechSynthesis: ${e.error || 'unknown'}`));
     };
@@ -46,10 +63,30 @@ export function speak(text) {
   });
 }
 
+export async function speak(text) {
+  const t = (text || '').trim();
+  if (!t) return;
+  if (hasChromeTTS()) {
+    try {
+      await speakViaChromeTTS(t);
+      return;
+    } catch (e) {
+      console.warn('[wubble tts] chrome.tts failed, falling back to speechSynthesis:', e.message);
+    }
+  }
+  await speakViaSynth(t);
+}
+
 export function cancel() {
-  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  try { chrome?.tts?.stop?.(); } catch {}
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try { window.speechSynthesis.cancel(); } catch {}
+  }
 }
 
 export function isSpeaking() {
-  return 'speechSynthesis' in window && (window.speechSynthesis.speaking || window.speechSynthesis.pending);
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) return true;
+  }
+  return false;
 }
