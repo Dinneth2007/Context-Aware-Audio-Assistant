@@ -7,7 +7,7 @@ const TICK_MS = 1000;
 const DECAY_INTERVAL_MS = 5000;
 const DECAY_FACTOR = 0.95;
 const MIN_DWELL_RATIO = 0.5;
-const PROACTIVE_THRESHOLD_MS = 25000;
+const PROACTIVE_THRESHOLD_MS = 8000;
 
 let sections = [];
 let sectionById = new Map();

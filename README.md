@@ -12,7 +12,7 @@ Wubble is a Chrome extension that helps you understand what you're reading. It a
 
 - **Context-aware grounding.** Answers come from the section you're focused on, not a flat dump of the page text.
 - **Visible attention.** When the model answers, the section it grounded in briefly outlines on the page — no black box.
-- **Proactive engagement.** After 25 seconds of continuous dwell on a section without activity, Wubble offers to explain it.
+- **Proactive engagement.** After 8 seconds of continuous dwell on a section without activity, Wubble offers to explain it.
 
 ## How it understands user context
 
