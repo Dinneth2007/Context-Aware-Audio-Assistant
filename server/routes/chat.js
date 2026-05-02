@@ -1,11 +1,17 @@
 import { Router } from 'express';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
+// gemini-2.0-flash: stable streaming via the @google/generative-ai SDK.
+// gemini-2.5-flash routes some content through thinking-token paths that
+// chunk.text() doesn't surface in this SDK version, producing empty
+// streams even though non-streaming aggregation works.
+const MODEL_NAME = 'gemini-2.0-flash';
+
 let genai = null;
 function getModel() {
   if (!genai) genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   return genai.getGenerativeModel({
-    model: 'gemini-2.5-flash',
+    model: MODEL_NAME,
     systemInstruction: SYSTEM_PROMPT,
     generationConfig: { temperature: 0.3 },
   });
@@ -141,7 +147,7 @@ router.post('/chat', async (req, res) => {
     const usage = result.response.usageMetadata || null;
     res.json({
       answer,
-      model: 'gemini-2.5-flash',
+      model: MODEL_NAME,
       usage,
       focusSource: payload?.source || null,
       focusHeading: payload?.section?.heading || null,
